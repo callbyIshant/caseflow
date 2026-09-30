@@ -1,0 +1,29 @@
+services:
+  - type: web
+    name: caseflow-portfolio
+    runtime: docker
+    plan: free
+    region: frankfurt
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    autoDeployTrigger: off
+    healthCheckPath: /health/ready
+    envVars:
+      - key: ENV
+        value: production
+      - key: COOKIE_SECURE
+        value: "true"
+      - key: COOKIE_NAME
+        value: __Host-caseflow_session
+      - key: SESSION_TTL_HOURS
+        value: "168"
+      - key: LOG_LEVEL
+        value: INFO
+      - key: CSRF_SECRET
+        generateValue: true
+      - key: DATABASE_URL
+        sync: false
+      - key: PUBLIC_APP_URL
+        sync: false
+      - key: ALLOWED_ORIGIN
+        sync: false

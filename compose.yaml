@@ -1,0 +1,58 @@
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: caseflow
+      POSTGRES_PASSWORD: caseflow
+      POSTGRES_DB: caseflow
+    ports:
+      - "5433:5432"
+    volumes:
+      - local_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U caseflow -d caseflow"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+
+  migrate:
+    build: .
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      ENV: migration
+      DATABASE_URL: postgresql+psycopg://caseflow:caseflow@db:5432/caseflow
+      DATABASE_URL_DIRECT: postgresql+psycopg://caseflow:caseflow@db:5432/caseflow
+    depends_on:
+      db:
+        condition: service_healthy
+
+  app:
+    build: .
+    environment:
+      ENV: development
+      APP_NAME: CaseFlow
+      PUBLIC_APP_URL: http://localhost:8000
+      ALLOWED_ORIGIN: http://localhost:8000
+      DEV_ALLOWED_ORIGIN: http://localhost:5173
+      DATABASE_URL: postgresql+psycopg://caseflow:caseflow@db:5432/caseflow
+      DATABASE_URL_DIRECT: postgresql+psycopg://caseflow:caseflow@db:5432/caseflow
+      CSRF_SECRET: local-compose-only-secret-change-before-shared-use-0001
+      SESSION_TTL_HOURS: "168"
+      COOKIE_SECURE: "false"
+      COOKIE_NAME: caseflow_dev_session
+      LOG_LEVEL: INFO
+      ALLOW_DEMO_SEED: "false"
+    ports:
+      - "8000:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "from urllib.request import urlopen; urlopen('http://127.0.0.1:8000/health/ready', timeout=5).read()"]
+      interval: 10s
+      timeout: 6s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  local_pg:
