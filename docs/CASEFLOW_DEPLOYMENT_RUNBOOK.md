@@ -2,7 +2,7 @@
 
 **Goal:** Deliver one verified HTTPS URL for the compiled React frontend and versioned FastAPI backend; persist tickets in managed PostgreSQL. This runbook supplements the full product/technical spec.
 
-**Provisioning status:** This document is a recipe. It does **not** mean a GitHub repository, hosted application, public domain or provider account has already been created. A real link exists only after code is implemented, pushed and the authorized cloud deployment succeeds.
+**Provisioning status (2026-09-30):** Application code, Docker build, GitHub CI, Playwright workflow, and the gated Render/Neon deployment workflow are implemented. The GitHub repository is `https://github.com/callbyIshant/caseflow`. Neon and Render resources, production secrets, a workflow run, and a public app URL have not been verified or configured yet. The deployment workflow intentionally skips while configuration is missing.
 
 ## 1. Architecture
 
@@ -54,7 +54,7 @@ Use **separate** local/test DB and production Neon DB. Prefer nearby Neon/Render
 
 The server must fail to start in production if `CSRF_SECRET` is missing or insecure, `DATABASE_URL` is missing or the public origin isn't HTTPS. Do not print env values during debugging. Alembic should need only its database setting, not application session secrets.
 
-## 4. Project files the coding agent must deliver
+## 4. Project files delivered by this implementation
 
 ```text
 Dockerfile
@@ -72,10 +72,10 @@ frontend/vite.config.ts
 .github/workflows/ci.yml
 .github/workflows/deploy.yml
 README.md
-docs/DEPLOYMENT.md
+docs/CASEFLOW_DEPLOYMENT_RUNBOOK.md
 ```
 
-The source tree and exact settings module are in the product/technical spec.
+The production container, locked Python and npm dependencies, app migrations, and React client are present. The Compose file is `compose.yaml`. CI runs backend integration/migration checks, frontend lint/type/unit/build, dependency audits, Docker build, and an end-to-end browser journey. The GitHub deploy workflow runs after successful `main` CI, checks that its commit is still current, applies production migrations, requests that exact Render revision, waits for it to go live, and smoke-tests public routes.
 
 ## 5. Reference multistage Dockerfile
 
@@ -157,7 +157,7 @@ services:
       POSTGRES_USER: caseflow
       POSTGRES_PASSWORD: caseflow   # LOCAL DEVELOPMENT ONLY
       POSTGRES_DB: caseflow
-    ports: ["5432:5432"]
+    ports: ["5433:5432"]
     volumes:
       - local_pg:/var/lib/postgresql/data
     healthcheck:
@@ -204,7 +204,7 @@ If using host backend/Vite rather than full Docker, install dependencies, run Al
 
 ## 8. First production deploy: authoritative order
 
-**Step A — Develop and verify locally.** Run all tests and production Docker build. Run a clean migration against an empty local PostgreSQL DB. Verify local end-to-end flows and read-only demo.
+**Step A — Develop and verify locally.** Run the backend and frontend checks, dependency audits, Playwright browser journey, and production Docker build. Run a clean migration against an empty local PostgreSQL DB. Verify local end-to-end flows and read-only demo.
 
 **Step B — Push to GitHub.** Commit only source, dependency lock files, migrations, public fixtures and docs. Confirm `.env`, real passwords, database URLs and deploy-hook URLs are not tracked and not present in earlier commits. CI must be green.
 
@@ -222,50 +222,19 @@ alembic current
 
 Migrations should use direct URL only in `alembic/env.py`, while app uses runtime pooled `DATABASE_URL`. If production migration fails, **do not create/deploy an app that assumes those tables exist**. Fix/rollback appropriately.
 
-**Step E — Create Render Docker web service.** Connect GitHub repo, load `render.yaml` or equivalent dashboard settings, select Docker + available plan/region; configure required Render secrets. Obtain the actual generated hostname. Enter it as exact `https://...` for both public origin variables if not known during creation. Deploy/redeploy until logs show success and `/health/ready` works.
+**Step E — Create Render Docker web service.** Connect GitHub repo, load `render.yaml` or equivalent dashboard settings, select Docker + available plan/region; configure `DATABASE_URL` with the Neon pooled psycopg URL. Keep `autoDeployTrigger: off`. The Blueprint generates `CSRF_SECRET`; set `PUBLIC_APP_URL` and `ALLOWED_ORIGIN` to the exact generated HTTPS hostname. Check the current plan and billing before creating resources.
 
 **Step F — Test actual URL.** In a fresh browser window open landing + `/demo`; verify `/docs`; register fictional account; create/reply; verify private tester agent claim/respond; refresh nested SPA route; restart/redeploy and confirm ticket persists. Inspect cookies for correct production flags and ensure no secrets in client JS or logs.
 
-**Step G — Wire automatic deployments.** Render auto deploy OFF; create Render deploy hook in service settings and put URL in GitHub secret `RENDER_DEPLOY_HOOK_URL`. Add direct Neon migration connection under `PROD_DATABASE_URL_DIRECT` secret. Configure gated GitHub workflow and protect production environment if supported. Never expose these values in README.
+**Step G — Wire automatic deployments.** Create a Render deploy hook for the service and store its URL in repository secret `RENDER_DEPLOY_HOOK_URL`. Store the Neon **direct** migration connection in repository secret `PROD_DATABASE_URL_DIRECT`; the Render service itself uses the pooled URL. Store a Render API key in repository secret `RENDER_API_KEY` and the service id in repository variable `RENDER_SERVICE_ID`. The existing workflow waits for the matching deployment to become live and smoke-tests it. Never expose these values in README or chat.
 
-**Step H — README.** Add **actual** public origin as live demo link only after Step F; add screenshots and free-tier cold-start note.
+**Step H — README.** The repository includes the local demo screenshot. Add an actual public origin as the live-demo link only after Step F; document current free-tier cold-start behavior if applicable.
 
-## 9. Reference GitHub Actions deploy-stage pseudocode
+## 9. Existing GitHub Actions deployment workflow
 
-The coding agent should create a complete `deploy.yml` with `backend-tests`, `frontend-tests`, optional container build, and a gated `deploy` job on `push: main`. The following is a focused template of the **deploy job**, not a standalone complete workflow:
+`.github/workflows/ci.yml` runs the full checks on pushes and pull requests. `.github/workflows/deploy.yml` runs only after a successful push-to-`main` CI workflow. It skips cleanly and emits a notice when any required secret or service variable is missing. With configuration present, it confirms the source SHA is still the latest `main`, applies Neon migrations with the direct URL, requests that exact commit through the Render deploy hook, verifies the returned Render deployment id/status/commit through the provider API, obtains the service origin, and smoke-tests it. Render automatic deployments must remain off so a service cannot deploy ahead of the migration step.
 
-```yaml
-# Within .github/workflows/deploy.yml, after required test jobs
-  deploy:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [backend-tests, frontend-tests]
-    runs-on: ubuntu-latest
-    environment: production
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v4  # pin to verified current release/SHA in actual repo
-      - uses: actions/setup-python@v5  # pin to verified current release/SHA in actual repo
-        with:
-          python-version: '3.12'
-      - name: Install migration dependencies
-        working-directory: backend
-        run: pip install -r requirements.txt
-      - name: Apply production migrations
-        working-directory: backend
-        env:
-          DATABASE_URL_DIRECT: ${{ secrets.PROD_DATABASE_URL_DIRECT }}
-          ENV: migration
-        run: alembic upgrade head
-      - name: Trigger Render deploy
-        env:
-          DEPLOY_HOOK: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
-        run: |
-          test -n "$DEPLOY_HOOK"
-          curl --fail --silent --show-error --request POST "$DEPLOY_HOOK" >/dev/null
-```
-
-This is illustrative; the agent must implement separate real test jobs and choose current supported action versions. Render's hook success means a deploy was **triggered**, not necessarily completed. To verify the deployed revision, check Render deployment status through authenticated provider API/dashboard and then run public smoke tests; polling `/health/ready` alone could still hit the previous healthy revision during rollout.
+Configure repository secrets `PROD_DATABASE_URL_DIRECT`, `RENDER_DEPLOY_HOOK_URL`, and `RENDER_API_KEY`, and repository variable `RENDER_SERVICE_ID`. Use only HTTPS, never add these values to tracked files, and restrict repository access to trusted maintainers. A hook response alone is not proof that the app is live; the workflow checks the deployment status and commit before its smoke test.
 
 **Why not Render `preDeployCommand`?** At the time of this spec, Render's pre-deploy command is a paid-service feature. The recommended free-tier architecture runs migrations from guarded CI before triggering the Render deployment, rather than relying on an unavailable free-tier feature.
 

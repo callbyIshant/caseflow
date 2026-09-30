@@ -19,6 +19,8 @@ services:
         value: "168"
       - key: LOG_LEVEL
         value: INFO
+      - key: TRUST_RENDER_EDGE_IP
+        value: "true"
       - key: CSRF_SECRET
         generateValue: true
       - key: DATABASE_URL

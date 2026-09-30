@@ -18,7 +18,10 @@ engine: Engine = create_engine(
     pool_size=3,
     max_overflow=1,
     pool_timeout=5,
-    connect_args={"connect_timeout": 5},
+    connect_args={
+        "connect_timeout": 5,
+        "options": "-c statement_timeout=5000 -c idle_in_transaction_session_timeout=10000",
+    },
 )
 SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 

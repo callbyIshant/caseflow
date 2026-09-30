@@ -1,3 +1,4 @@
+import logging
 from collections.abc import Mapping
 
 from fastapi import Request
@@ -7,10 +8,17 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 
 class ApiError(Exception):
-    def __init__(self, status_code: int, code: str, message: str) -> None:
+    def __init__(
+        self,
+        status_code: int,
+        code: str,
+        message: str,
+        headers: Mapping[str, str] | None = None,
+    ) -> None:
         self.status_code = status_code
         self.code = code
         self.message = message
+        self.headers = dict(headers or {})
 
 
 def request_id_for(request: Request) -> str:
@@ -70,6 +78,19 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
 
 async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    route = request.scope.get("route")
+    route_path = getattr(route, "path", None) or request.url.path
+    logging.getLogger("caseflow.request").exception(
+        "Unhandled request failure",
+        extra={
+            "fields": {
+                "event": "request_error",
+                "request_id": request_id_for(request),
+                "route": route_path,
+                "error_type": type(exc).__name__,
+            }
+        },
+    )
     return error_response(
         request,
         500,
@@ -79,4 +100,4 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
 
 
 async def api_exception_handler(request: Request, exc: ApiError) -> JSONResponse:
-    return error_response(request, exc.status_code, exc.code, exc.message)
+    return error_response(request, exc.status_code, exc.code, exc.message, headers=exc.headers)

@@ -12,7 +12,7 @@ export function ProtectedRoute({ children, roles }: { children: ReactNode; roles
     return <Navigate to={`/login?next=${encodeURIComponent(next)}`} replace />;
   }
   if (roles && !roles.includes(user.role)) {
-    return <Navigate to={user.role === "customer" ? "/app" : "/agent"} replace />;
+    return <Navigate to="/forbidden" replace />;
   }
   return children;
 }

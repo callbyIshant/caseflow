@@ -7,6 +7,7 @@ from alembic import context
 from app.core.config import get_settings
 from app.core.db import Base
 from app.features.auth import models as _auth_models  # noqa: F401
+from app.features.tickets import models as _ticket_models  # noqa: F401
 from app.features.users import models as _user_models  # noqa: F401
 
 config = context.config

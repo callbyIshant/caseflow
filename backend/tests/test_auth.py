@@ -7,8 +7,10 @@ from sqlalchemy import delete, select
 
 from app.core.config import get_settings
 from app.core.db import SessionLocal
+from app.core.rate_limit import rate_limiter
 from app.core.security import hash_session_token, verify_password
 from app.features.auth.models import UserSession
+from app.features.tickets.models import Ticket, TicketEvent, TicketMessage
 from app.features.users.models import User
 from app.features.users.provisioning import provision_staff_user
 from app.main import app
@@ -17,14 +19,32 @@ ORIGIN = get_settings().allowed_origin
 PASSWORD = "a patient example passphrase"
 
 
+def remove_test_user(email: str) -> None:
+    with SessionLocal() as db:
+        user_id = db.scalar(select(User.id).where(User.email == email))
+        if user_id is not None:
+            ticket_ids = select(Ticket.id).where(Ticket.customer_id == user_id)
+            db.execute(
+                delete(TicketEvent).where(
+                    (TicketEvent.actor_id == user_id) | TicketEvent.ticket_id.in_(ticket_ids)
+                )
+            )
+            db.execute(
+                delete(TicketMessage).where(
+                    (TicketMessage.author_id == user_id) | TicketMessage.ticket_id.in_(ticket_ids)
+                )
+            )
+            db.execute(delete(Ticket).where(Ticket.customer_id == user_id))
+            db.execute(delete(User).where(User.id == user_id))
+            db.commit()
+
+
 @pytest.fixture
 def user_client() -> Iterator[tuple[TestClient, str]]:
     email = f"caseflow-{uuid4().hex}@example.com"
     with TestClient(app) as client:
         yield client, email
-    with SessionLocal() as db:
-        db.execute(delete(User).where(User.email == email))
-        db.commit()
+    remove_test_user(email)
 
 
 def register(client: TestClient, email: str, **extra: object):
@@ -210,3 +230,28 @@ def test_same_origin_is_required_for_credential_creation(
 
     assert response.status_code == 403
     assert response.json()["error"]["code"] == "ORIGIN_INVALID"
+
+
+def test_five_failed_login_attempts_are_rate_limited() -> None:
+    settings = get_settings()
+    settings.rate_limit_enabled = True
+    rate_limiter.clear_all()
+    email = f"rate-limit-{uuid4().hex}@example.com"
+    with TestClient(app) as client:
+        for _ in range(5):
+            response = client.post(
+                "/api/v1/auth/login",
+                json={"email": email, "password": PASSWORD},
+                headers={"Origin": ORIGIN},
+            )
+            assert response.status_code == 401
+        blocked = client.post(
+            "/api/v1/auth/login",
+            json={"email": email, "password": PASSWORD},
+            headers={"Origin": ORIGIN},
+        )
+
+    assert blocked.status_code == 429
+    assert blocked.json()["error"]["code"] == "RATE_LIMITED"
+    assert blocked.headers["retry-after"].isdigit()
+    assert blocked.headers["x-request-id"] == blocked.json()["error"]["request_id"]

@@ -1,12 +1,14 @@
 # CaseFlow
 
-CaseFlow is a customer-service ticketing app for **Northstar Services**, a fictional company. It is a portfolio project with synthetic data; it is not affiliated with a financial institution.
+CaseFlow is a customer-support ticketing portfolio app for **Northstar Services**, a fictional company. It demonstrates customer requests, a shared support queue, private staff notes, and a public read-only product tour. It is not affiliated with a financial institution and must only contain synthetic data.
 
-**Live demo:** Not deployed yet. A link will be added after the hosted service passes the documented smoke checks.
+**Live demo:** Not deployed yet. A public link will be added after the hosted app passes the production smoke checks.
+
+![CaseFlow read-only demo](docs/screenshots/caseflow-demo.png)
 
 ## Project status
 
-The project is being implemented in milestones against the [product and technical specification](docs/CASEFLOW_PRODUCT_TECHNICAL_SPEC.md) and [deployment runbook](docs/CASEFLOW_DEPLOYMENT_RUNBOOK.md). Complete: M0 application skeleton and M1 authentication. In progress: M2 customer ticket workflow.
+Milestones M0–M5 are implemented: application foundation, authentication, customer tickets, support workflow, read-only demo, and security/quality hardening. The Render/Neon deployment workflow is configured but gated; no production database, Render service, deployment URL, or cloud credentials are configured in this repository yet. See the [product and technical specification](docs/CASEFLOW_PRODUCT_TECHNICAL_SPEC.md), [deployment runbook](docs/CASEFLOW_DEPLOYMENT_RUNBOOK.md), and [implementation decisions](docs/ADR-001-implementation-clarifications.md).
 
 ## Architecture
 
@@ -14,37 +16,27 @@ The project is being implemented in milestones against the [product and technica
 Browser (one origin)
   ├── React + TypeScript + Vite
   └── FastAPI /api/v1 + health + OpenAPI
-       ├── Argon2id credentials; opaque sessions and per-session CSRF
-       └── PostgreSQL 16
+       ├── Argon2id passwords; opaque sessions; per-session CSRF
+       └── PostgreSQL 16 + Alembic migrations
 ```
 
-Local development runs Vite at `http://localhost:5173` and FastAPI at `http://localhost:8000`; Vite proxies `/api`, `/docs`, `/openapi.json` and `/health` to FastAPI. Production packages the compiled React app into a non-root FastAPI Docker image. PostgreSQL is the only persistent store.
+Production uses a multi-stage Docker build and serves the compiled SPA from FastAPI. PostgreSQL is the only persistent store. The hosted target is Render for the web service and Neon for PostgreSQL. Local Compose maps PostgreSQL to host port 5433.
 
-The Compose database maps to host port `5433` to avoid conflicting with a PostgreSQL service already running on the usual `5432` port.
+## Run locally
 
-## Requirements
+Requirements: Docker Engine/Desktop with Compose, Python 3.12, Node.js 22.12+, and uv 0.12.21.
 
-- Docker Engine/Desktop with Compose
-- Python 3.12
-- Node.js 22.12 or newer
-- `uv` 0.12.21 for the locked Python environment (`python -m pip install uv==0.12.21`)
-
-## Run the integrated local stack
-
-From the repository root:
+Run the complete production-like app:
 
 ```powershell
 docker compose up --build
 ```
 
-Compose starts local PostgreSQL, runs the one-shot Alembic migration service, then starts the app. Open `http://localhost:8000`. The database is local synthetic development data only. Stop the services with `Ctrl+C`; use `docker compose down` to stop containers while retaining the local database volume.
+Open `http://localhost:8000`; `/demo` is a read-only tour with fixed fictional examples. Stop with `Ctrl+C`; `docker compose down` stops containers while keeping the local database volume. To remove the local database volume too, use `docker compose down --volumes`.
 
-## Run frontend/backend development servers
-
-Create a local `.env` from `.env.example`, then start PostgreSQL and apply migrations:
+For Vite development, copy `.env.example` to `.env`, start the local database, then run:
 
 ```powershell
-Copy-Item .env.example .env
 docker compose up -d db
 Set-Location backend
 uv sync --locked --all-groups
@@ -60,40 +52,45 @@ npm ci
 npm run dev
 ```
 
-Open `http://localhost:5173`. Vite proxies the API, docs and health checks so browser requests remain same-origin. Do not commit `.env` or use its development-only values in production.
+Open `http://localhost:5173`. Vite proxies API, docs, and health requests to FastAPI. Never commit `.env` or use its development values in production.
 
-## Quality commands
+## Main workflows
+
+- Customers can register, sign in, submit requests, review their timeline, reply, reopen resolved requests, and see their own requests only.
+- Agents can review and claim the shared queue, change status/priority, respond publicly, add staff-only notes, and resolve requests.
+- Admins can also reassign work and close requests.
+- Staff accounts are provisioned outside public signup with `uv run python -m app.scripts.provision_staff`; set the documented `CASEFLOW_STAFF_*` values in a trusted terminal. Never publish or reuse real credentials.
+- `/demo` shows fixed synthetic examples, has no write controls, and does not fetch live ticket data.
+
+## Quality checks
 
 ```powershell
 Set-Location backend
-uv run ruff check app tests alembic
-uv run mypy app
-uv run pytest
+uv run --locked ruff check app tests alembic
+uv run --locked mypy app
+uv run --locked pytest
 
 Set-Location ..\frontend
+npm ci
 npm run lint
 npm run typecheck
 npm test
 npm run build
+npm audit --audit-level=high
+npm run test:e2e
 ```
 
-Backend integration tests use real PostgreSQL. The GitHub Actions workflow runs backend checks with a PostgreSQL 16 service and builds the production container after frontend/backend checks pass.
+Backend integration tests use PostgreSQL. The Playwright journey provisions disposable local customer and agent accounts, exercises registration through resolution/reopen, verifies private-note isolation, and removes its test records afterward. Run it against the local Compose stack; the CI workflow starts and removes its own stack. GitHub Actions also checks Alembic parity, audits dependencies, and builds the production container. Production deploys run only after successful main-branch CI and only after the required GitHub secrets and service variable have been configured.
 
-## Authentication available in M1
+## Security and operational limits
 
-- Customer registration and sign-in at `/register` and `/login`; staff roles cannot be selected at signup.
-- A seven-day server-managed session cookie. Only its SHA-256 hash is stored in PostgreSQL; customer mutations need the matching per-session HMAC CSRF token held in browser memory.
-- Same-origin validation on all unsafe requests, generic invalid-credential responses, active-account checks, and immediate logout revocation.
-- `/api/v1/auth/session` restores browser state after reload; `/api/v1/users/me` returns only the signed-in user's public profile.
-- Agent/admin accounts are provisioned out of band with `uv run python -m app.scripts.provision_staff` after the four `CASEFLOW_STAFF_*` values are set securely in the trusted terminal. Public registration rejects privilege fields.
+- One HTTPS origin, HttpOnly server-managed session cookies, CSRF and same-origin checks, and backend role/ownership enforcement.
+- Rate limits, request-size checks, structured redacted request logs, security headers, and database statement/idle-transaction timeouts are enabled.
+- In-process abuse limits reset on restart and suit one app instance; a shared rate-limit store is needed before scaling to multiple instances or treating this as a real service.
+- Email verification, password reset, and distributed abuse controls are not implemented. Do not enter real customer, payment-card, or financial account data.
+- Apply schema changes with Alembic; the app does not create schema on startup.
+- Render filesystem is not used to store application data. PostgreSQL holds ticket state.
 
-Run `docker compose up --build` to apply migrations and open the integrated app. The local database is disposable development data. Public registration is intended for synthetic portfolio use; email verification and password recovery are not implemented.
+## Deployment handoff
 
-## Security and operations
-
-- Production uses one HTTPS origin, server-managed opaque sessions, HttpOnly cookies, CSRF protection and server-side role checks.
-- PostgreSQL schema changes are applied with Alembic. The application does not create schema at startup.
-- The production database is intended for Neon; Render hosts the Docker web service. No production credentials or live URL are present in this repository yet.
-- Do not enter real customer, payment-card or financial account data. Account verification/recovery and persistent distributed abuse controls are future work before real-world use.
-
-See [ADR-001](docs/ADR-001-implementation-clarifications.md) for implementation clarifications and the deployment runbook for the authorized production setup steps.
+The deployment workflow expects GitHub secret `PROD_DATABASE_URL_DIRECT`, secret `RENDER_DEPLOY_HOOK_URL`, secret `RENDER_API_KEY`, and repository variable `RENDER_SERVICE_ID`. Until these are configured for a real Neon database and Render service, deployment is skipped and the README intentionally has no live URL. Follow the [deployment runbook](docs/CASEFLOW_DEPLOYMENT_RUNBOOK.md); do not paste secret values into chat or Git.

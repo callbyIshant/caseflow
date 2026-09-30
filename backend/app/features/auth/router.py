@@ -8,6 +8,12 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.core.db import get_db
 from app.core.errors import ApiError
+from app.core.rate_limit import (
+    client_ip,
+    identity_key,
+    release_rate_limit_event,
+    reserve_rate_limit_event,
+)
 from app.core.security import derive_csrf_token, hash_session_token
 from app.features.auth.models import UserSession
 from app.features.auth.schemas import (
@@ -41,8 +47,11 @@ def _set_session_cookie(response: Response, token: str, expires_at: datetime) ->
 
 @router.post("/auth/register", response_model=AuthenticatedResponse, status_code=201)
 def register(
-    payload: RegisterRequest, response: Response, db: Database
+    payload: RegisterRequest, response: Response, db: Database, request: Request
 ) -> AuthenticatedResponse:
+    ip = client_ip(request)
+    key = f"register:ip:{ip}"
+    reserve_rate_limit_event(key, 3, 60 * 60)
     created = register_customer(db, payload)
     _set_session_cookie(response, created.token, created.expires_at)
     return AuthenticatedResponse(
@@ -51,8 +60,32 @@ def register(
 
 
 @router.post("/auth/login", response_model=AuthenticatedResponse)
-def login(payload: LoginRequest, response: Response, db: Database) -> AuthenticatedResponse:
-    created = login_customer(db, payload)
+def login(
+    payload: LoginRequest, response: Response, db: Database, request: Request
+) -> AuthenticatedResponse:
+    ip = client_ip(request)
+    ip_key = f"login:ip:{ip}"
+    identity = f"login:identity:{identity_key(str(payload.email))}"
+    ip_token = reserve_rate_limit_event(ip_key, 20, 15 * 60)
+    try:
+        identity_token = reserve_rate_limit_event(identity, 5, 15 * 60)
+    except ApiError:
+        release_rate_limit_event(ip_key, ip_token)
+        raise
+    try:
+        created = login_customer(db, payload)
+    except ApiError as exc:
+        if exc.code == "INVALID_CREDENTIALS":
+            raise
+        release_rate_limit_event(ip_key, ip_token)
+        release_rate_limit_event(identity, identity_token)
+        raise
+    except Exception:
+        release_rate_limit_event(ip_key, ip_token)
+        release_rate_limit_event(identity, identity_token)
+        raise
+    release_rate_limit_event(ip_key, ip_token)
+    release_rate_limit_event(identity, identity_token)
     _set_session_cookie(response, created.token, created.expires_at)
     return AuthenticatedResponse(
         user=UserPublic.model_validate(created.user), csrf_token=created.csrf_token

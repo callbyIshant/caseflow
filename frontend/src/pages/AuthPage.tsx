@@ -5,7 +5,7 @@ import { useAuth } from "../auth/AuthContext";
 
 function destination(next: string | null, role: string): string {
   if (next?.startsWith("/") && !next.startsWith("//")) return next;
-  return role === "customer" ? "/app" : "/agent";
+  return role === "customer" ? "/app/dashboard" : "/agent/queue";
 }
 
 export function AuthPage({ mode }: { mode: "login" | "register" }) {
@@ -66,35 +66,6 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
         <p className="auth-switch">{isRegister ? "Already have an account?" : "New to CaseFlow?"} <Link to={isRegister ? "/login" : "/register"}>{isRegister ? "Sign in" : "Create an account"}</Link></p>
         <p className="auth-disclaimer">Portfolio demonstration only. Use fictional information, not real support or financial account details.</p>
       </section>
-    </main>
-  );
-}
-
-export function CustomerHome() {
-  return <SignedInHome audience="Customer workspace" />;
-}
-
-export function StaffHome() {
-  return <SignedInHome audience="Support workspace" />;
-}
-
-function SignedInHome({ audience }: { audience: string }) {
-  const { user, logout } = useAuth();
-  const navigate = useNavigate();
-  const [error, setError] = useState("");
-  async function signOut() {
-    try {
-      await logout();
-      navigate("/", { replace: true });
-    } catch {
-      setError("We could not sign you out. Please try again.");
-    }
-  }
-
-  return (
-    <main className="workspace-page">
-      <header className="workspace-bar"><Link className="brand" to="/"><span className="brand-mark-small">C</span><span>caseflow</span></Link><button className="text-button" type="button" onClick={signOut}>Sign out</button></header>
-      <section className="workspace-card"><span className="auth-kicker">NORTHSTAR SERVICES · SUPPORT DESK</span><h1>{audience}</h1><p>You’re signed in as <strong>{user?.full_name}</strong>.</p><p className="workspace-next">Your account is ready. The request workspace is coming next.</p>{error && <p role="alert" className="form-error">{error}</p>}</section>
     </main>
   );
 }

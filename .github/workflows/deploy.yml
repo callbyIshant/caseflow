@@ -1,0 +1,148 @@
+name: CaseFlow production deployment
+
+on:
+  workflow_run:
+    workflows: [CaseFlow CI]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: caseflow-production-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.event.workflow_run.event == 'push' && github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - name: Check production configuration
+        id: configuration
+        env:
+          PROD_DATABASE_URL_DIRECT: ${{ secrets.PROD_DATABASE_URL_DIRECT }}
+          RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          RENDER_SERVICE_ID: ${{ vars.RENDER_SERVICE_ID }}
+        run: |
+          if [[ -n "$PROD_DATABASE_URL_DIRECT" && -n "$RENDER_DEPLOY_HOOK_URL" && -n "$RENDER_API_KEY" && -n "$RENDER_SERVICE_ID" ]]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Production deploy skipped: configure GitHub secret PROD_DATABASE_URL_DIRECT, secret RENDER_DEPLOY_HOOK_URL, secret RENDER_API_KEY, and variable RENDER_SERVICE_ID."
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.configuration.outputs.configured == 'true'
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+
+      - name: Skip stale main revisions
+        id: current-revision
+        if: steps.configuration.outputs.configured == 'true'
+        env:
+          DEPLOY_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          git fetch origin main --quiet
+          current_main="$(git rev-parse FETCH_HEAD)"
+          if [[ "$current_main" == "$DEPLOY_SHA" ]]; then
+            echo "current=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "current=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::This successful CI run is for a superseded main revision; the newer revision will deploy after its checks pass."
+          fi
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        if: steps.configuration.outputs.configured == 'true' && steps.current-revision.outputs.current == 'true'
+        with:
+          python-version: "3.12"
+
+      - name: Install locked migration dependencies
+        if: steps.configuration.outputs.configured == 'true' && steps.current-revision.outputs.current == 'true'
+        working-directory: backend
+        run: python -m pip install --disable-pip-version-check --require-hashes -r requirements.txt
+
+      - name: Apply Neon migrations
+        if: steps.configuration.outputs.configured == 'true' && steps.current-revision.outputs.current == 'true'
+        working-directory: backend
+        env:
+          ENV: migration
+          DATABASE_URL_DIRECT: ${{ secrets.PROD_DATABASE_URL_DIRECT }}
+        run: |
+          alembic upgrade head
+          alembic current
+
+      - name: Trigger the exact Render revision
+        if: steps.configuration.outputs.configured == 'true' && steps.current-revision.outputs.current == 'true'
+        id: trigger
+        env:
+          RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+          DEPLOY_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          response="$(curl --fail --silent --show-error --request POST "${RENDER_DEPLOY_HOOK_URL}&ref=${DEPLOY_SHA}")"
+          deploy_id="$(jq -r '.deploy.id // empty' <<< "$response")"
+          echo "deploy_id=$deploy_id" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for this revision to become live
+        if: steps.configuration.outputs.configured == 'true' && steps.current-revision.outputs.current == 'true'
+        id: live-deploy
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          RENDER_SERVICE_ID: ${{ vars.RENDER_SERVICE_ID }}
+          DEPLOY_ID: ${{ steps.trigger.outputs.deploy_id }}
+          DEPLOY_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          for attempt in $(seq 1 60); do
+            if [[ -z "$DEPLOY_ID" ]]; then
+              deploy_list="$(curl --fail --silent --show-error \
+                --header "Authorization: Bearer $RENDER_API_KEY" \
+                "https://api.render.com/v1/services/${RENDER_SERVICE_ID}/deploys?limit=100")"
+              DEPLOY_ID="$(jq -r --arg sha "$DEPLOY_SHA" '[.[] | .deploy | select(.commit.id == $sha)][0].id // empty' <<< "$deploy_list")"
+            fi
+
+            if [[ -n "$DEPLOY_ID" ]]; then
+              deploy="$(curl --fail --silent --show-error \
+                --header "Authorization: Bearer $RENDER_API_KEY" \
+                "https://api.render.com/v1/services/${RENDER_SERVICE_ID}/deploys/${DEPLOY_ID}")"
+              status="$(jq -r '.status // empty' <<< "$deploy")"
+              commit="$(jq -r '.commit.id // empty' <<< "$deploy")"
+              if [[ "$status" == "live" && "$commit" == "$DEPLOY_SHA" ]]; then
+                echo "deploy_id=$DEPLOY_ID" >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+              case "$status" in
+                build_failed|update_failed|pre_deploy_failed|canceled)
+                  echo "Render deployment ended with status: $status" >&2
+                  exit 1
+                  ;;
+              esac
+            fi
+            sleep 15
+          done
+          echo "Timed out waiting for the requested Render commit to become live." >&2
+          exit 1
+
+      - name: Smoke-test the deployed public origin
+        if: steps.configuration.outputs.configured == 'true' && steps.current-revision.outputs.current == 'true'
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          RENDER_SERVICE_ID: ${{ vars.RENDER_SERVICE_ID }}
+        run: |
+          service="$(curl --fail --silent --show-error \
+            --header "Authorization: Bearer $RENDER_API_KEY" \
+            "https://api.render.com/v1/services/${RENDER_SERVICE_ID}")"
+          origin="$(jq -r '.serviceDetails.url // empty' <<< "$service")"
+          if [[ "$origin" != https://* ]]; then
+            echo "Render did not return the service's HTTPS origin." >&2
+            exit 1
+          fi
+          for path in / /demo /docs /health/ready /app/dashboard; do
+            status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' "${origin}${path}")"
+            if [[ "$status" != 200 ]]; then
+              echo "Smoke test failed for ${path} with HTTP ${status}." >&2
+              exit 1
+            fi
+          done

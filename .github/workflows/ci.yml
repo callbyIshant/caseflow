@@ -53,6 +53,9 @@ jobs:
       - name: Apply migrations
         working-directory: backend
         run: uv run --locked alembic upgrade head
+      - name: Check migration/model parity
+        working-directory: backend
+        run: uv run --locked alembic check
       - name: Ruff
         working-directory: backend
         run: uv run --locked ruff check app tests alembic
@@ -62,6 +65,9 @@ jobs:
       - name: PostgreSQL integration tests
         working-directory: backend
         run: uv run --locked pytest
+      - name: Python dependency audit
+        working-directory: backend
+        run: uvx --from pip-audit==2.10.1 pip-audit -r requirements.txt
 
   frontend:
     runs-on: ubuntu-24.04
@@ -75,6 +81,9 @@ jobs:
       - name: Install locked dependencies
         working-directory: frontend
         run: npm ci
+      - name: npm dependency audit
+        working-directory: frontend
+        run: npm audit --audit-level=high
       - name: ESLint
         working-directory: frontend
         run: npm run lint
@@ -95,3 +104,49 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Build production container
         run: docker build --tag caseflow:ci .
+
+  e2e:
+    runs-on: ubuntu-24.04
+    needs: [backend, frontend, container]
+    env:
+      DATABASE_URL: postgresql+psycopg://caseflow:caseflow@localhost:5433/caseflow
+      DATABASE_URL_DIRECT: postgresql+psycopg://caseflow:caseflow@localhost:5433/caseflow
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Install uv
+        run: python -m pip install --disable-pip-version-check "uv==0.12.21"
+      - name: Install locked backend dependencies
+        working-directory: backend
+        run: uv sync --locked --all-groups
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install locked frontend dependencies
+        working-directory: frontend
+        run: npm ci
+      - name: Install Playwright Chromium
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+      - name: Start migrated production container stack
+        run: docker compose up --build --detach app
+      - name: Wait for CaseFlow
+        run: |
+          for attempt in $(seq 1 36); do
+            if curl --fail --silent http://localhost:8000/health/ready >/dev/null; then
+              exit 0
+            fi
+            sleep 5
+          done
+          docker compose logs app migrate
+          exit 1
+      - name: Customer and support Playwright journey
+        working-directory: frontend
+        run: npm run test:e2e
+      - name: Stop and discard CI database
+        if: always()
+        run: docker compose down --volumes

@@ -3,9 +3,14 @@ type ErrorPayload = {
 };
 
 let csrfToken: string | null = null;
+let unauthorizedHandler: (() => void) | null = null;
 
 export function setCsrfToken(token: string | null): void {
   csrfToken = token;
+}
+
+export function setUnauthorizedHandler(handler: (() => void) | null): void {
+  unauthorizedHandler = handler;
 }
 
 export class ApiError extends Error {
@@ -36,6 +41,7 @@ export async function apiRequest<T>(path: string, init: RequestInit = {}): Promi
   });
   if (!response.ok) {
     const payload = (await response.json().catch(() => ({}))) as ErrorPayload;
+    if (response.status === 401) unauthorizedHandler?.();
     throw new ApiError(
       response.status,
       payload.error?.code ?? "REQUEST_FAILED",

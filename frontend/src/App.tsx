@@ -122,28 +122,61 @@ function LandingPage() {
     </main>
   );
 }
-import { BrowserRouter, Link, Route, Routes } from "react-router-dom";
+import { useEffect } from "react";
+import { BrowserRouter, Link, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { AuthProvider } from "./auth/AuthProvider";
 import { ProtectedRoute } from "./auth/ProtectedRoute";
-import { AuthPage, CustomerHome, StaffHome } from "./pages/AuthPage";
+import { AuthPage } from "./pages/AuthPage";
+import { DemoPage, ForbiddenPage, NotFoundPage } from "./pages/DemoPage";
+import { AgentQueue, AgentTicketDetail } from "./pages/AgentPages";
+import {
+  CustomerDashboard,
+  CustomerTicketCreate,
+  CustomerTicketDetail,
+  CustomerTicketList,
+} from "./pages/TicketPages";
 
 
-function DemoPreview() {
-  return <main className="workspace-page"><header className="workspace-bar"><Link className="brand" to="/"><span className="brand-mark-small">C</span><span>caseflow</span></Link><Link className="text-button" to="/register">Create account</Link></header><section className="workspace-card"><span className="auth-kicker">READ-ONLY PRODUCT TOUR</span><h1>CaseFlow demo</h1><p>The synthetic support queue preview is being prepared.</p><Link className="button button-primary" to="/">Back to home</Link></section></main>;
+function PageMetadata() {
+  const { pathname } = useLocation();
+  useEffect(() => {
+    let title = "CaseFlow — Support, in good order";
+    if (pathname === "/demo") title = "Product tour | CaseFlow";
+    else if (pathname === "/login") title = "Sign in | CaseFlow";
+    else if (pathname === "/register") title = "Create account | CaseFlow";
+    else if (pathname === "/app/dashboard") title = "Your overview | CaseFlow";
+    else if (pathname === "/app/tickets") title = "My requests | CaseFlow";
+    else if (pathname === "/app/tickets/new") title = "New request | CaseFlow";
+    else if (pathname.startsWith("/app/tickets/")) title = "Request details | CaseFlow";
+    else if (pathname === "/agent/queue") title = "Shared queue | CaseFlow";
+    else if (pathname.startsWith("/agent/tickets/")) title = "Support request | CaseFlow";
+    else if (pathname === "/forbidden") title = "Access denied | CaseFlow";
+    else if (!new Set(["/", "/app", "/agent"]).has(pathname)) title = "Page not found | CaseFlow";
+    document.title = title;
+  }, [pathname]);
+  return null;
 }
 
 export default function App() {
   return (
     <BrowserRouter>
       <AuthProvider>
+        <PageMetadata />
         <Routes>
           <Route path="/" element={<LandingPage />} />
           <Route path="/login" element={<AuthPage mode="login" />} />
           <Route path="/register" element={<AuthPage mode="register" />} />
-          <Route path="/demo" element={<DemoPreview />} />
-          <Route path="/app/*" element={<ProtectedRoute roles={["customer"]}><CustomerHome /></ProtectedRoute>} />
-          <Route path="/agent/*" element={<ProtectedRoute roles={["agent", "admin"]}><StaffHome /></ProtectedRoute>} />
-          <Route path="*" element={<LandingPage />} />
+          <Route path="/demo" element={<DemoPage />} />
+          <Route path="/forbidden" element={<ProtectedRoute><ForbiddenPage /></ProtectedRoute>} />
+          <Route path="/app" element={<ProtectedRoute roles={["customer"]}><Navigate to="/app/dashboard" replace /></ProtectedRoute>} />
+          <Route path="/app/dashboard" element={<ProtectedRoute roles={["customer"]}><CustomerDashboard /></ProtectedRoute>} />
+          <Route path="/app/tickets" element={<ProtectedRoute roles={["customer"]}><CustomerTicketList /></ProtectedRoute>} />
+          <Route path="/app/tickets/new" element={<ProtectedRoute roles={["customer"]}><CustomerTicketCreate /></ProtectedRoute>} />
+          <Route path="/app/tickets/:ticketId" element={<ProtectedRoute roles={["customer"]}><CustomerTicketDetail /></ProtectedRoute>} />
+          <Route path="/agent" element={<ProtectedRoute roles={["agent", "admin"]}><Navigate to="/agent/queue" replace /></ProtectedRoute>} />
+          <Route path="/agent/queue" element={<ProtectedRoute roles={["agent", "admin"]}><AgentQueue /></ProtectedRoute>} />
+          <Route path="/agent/tickets/:ticketId" element={<ProtectedRoute roles={["agent", "admin"]}><AgentTicketDetail /></ProtectedRoute>} />
+          <Route path="*" element={<NotFoundPage />} />
         </Routes>
       </AuthProvider>
     </BrowserRouter>

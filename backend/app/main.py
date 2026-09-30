@@ -4,6 +4,7 @@ from typing import cast
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.types import ExceptionHandler
 
@@ -19,6 +20,8 @@ from app.core.errors import (
 )
 from app.core.middleware import SecurityHeadersMiddleware
 from app.features.auth.router import router as auth_router
+from app.features.tickets import models as _ticket_models  # noqa: F401
+from app.features.tickets.router import router as ticket_router
 
 settings = get_settings()
 app = FastAPI(
@@ -36,6 +39,7 @@ app.add_exception_handler(RequestValidationError, cast(ExceptionHandler, validat
 app.add_exception_handler(Exception, unhandled_exception_handler)
 app.add_exception_handler(ApiError, cast(ExceptionHandler, api_exception_handler))
 app.include_router(auth_router)
+app.include_router(ticket_router)
 
 
 @app.get("/health/live", tags=["health"])
@@ -63,10 +67,20 @@ def spa_root() -> FileResponse | JSONResponse:
     return JSONResponse({"name": "CaseFlow", "status": "development", "frontend": "http://localhost:5173"})
 
 
+static_assets_path = Path(__file__).parent / "static" / "assets"
+if static_assets_path.is_dir():
+    app.mount("/assets", StaticFiles(directory=static_assets_path), name="static-assets")
+
+
 @app.get("/{full_path:path}", include_in_schema=False, response_model=None)
 def spa_fallback(full_path: str, request: Request) -> FileResponse:
-    reserved_prefixes = ("api/", "docs", "openapi.json", "health/")
-    if full_path.startswith(reserved_prefixes) or full_path.startswith("assets/"):
+    reserved_prefixes = ("api/", "docs/", "health/")
+    if (
+        full_path in {"api", "docs", "openapi.json", "health"}
+        or full_path.startswith(reserved_prefixes)
+        or full_path.startswith("assets/")
+        or "." in full_path.rsplit("/", 1)[-1]
+    ):
         raise StarletteHTTPException(status_code=404)
     index_path = Path(__file__).parent / "static" / "index.html"
     if index_path.is_file():

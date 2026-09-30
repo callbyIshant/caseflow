@@ -39,6 +39,8 @@ class Settings(BaseSettings):
     log_level: str = Field(default="INFO", validation_alias="LOG_LEVEL")
     allow_demo_seed: bool = Field(default=False, validation_alias="ALLOW_DEMO_SEED")
     max_request_bytes: int = Field(default=32_768, ge=1_024, le=32_768, validation_alias="MAX_REQUEST_BYTES")
+    rate_limit_enabled: bool = Field(default=True, validation_alias="RATE_LIMIT_ENABLED")
+    trust_render_edge_ip: bool = Field(default=False, validation_alias="TRUST_RENDER_EDGE_IP")
 
     @property
     def trusted_origins(self) -> frozenset[str]:
@@ -54,6 +56,8 @@ class Settings(BaseSettings):
             raise ValueError("DATABASE_URL must use the postgresql+psycopg scheme.")
 
         if self.environment == "production":
+            if not self.rate_limit_enabled:
+                raise ValueError("RATE_LIMIT_ENABLED must remain on in production.")
             public_origin = urlsplit(self.public_app_url)
             allowed_origin = urlsplit(self.allowed_origin)
             if (

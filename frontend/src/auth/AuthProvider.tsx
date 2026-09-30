@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
-import { apiRequest, setCsrfToken } from "../api/client";
+import { apiRequest, setCsrfToken, setUnauthorizedHandler } from "../api/client";
 import { AuthContext, type User } from "./AuthContext";
 
 type SessionResponse = {
@@ -13,6 +13,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [justLoggedOut, setJustLoggedOut] = useState(false);
+
+  const handleUnauthorized = useCallback(() => {
+    setCsrfToken(null);
+    setUser(null);
+    setJustLoggedOut(false);
+  }, []);
+
+  useEffect(() => {
+    setUnauthorizedHandler(handleUnauthorized);
+    return () => setUnauthorizedHandler(null);
+  }, [handleUnauthorized]);
 
   const refreshSession = useCallback(async () => {
     try {
