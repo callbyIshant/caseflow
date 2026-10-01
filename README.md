@@ -2,13 +2,13 @@
 
 CaseFlow is a customer-support ticketing portfolio app for **Northstar Services**, a fictional company. It demonstrates customer requests, a shared support queue, private staff notes, and a public read-only product tour. It is not affiliated with a financial institution and must only contain synthetic data.
 
-**Live demo:** Not deployed yet. A public link will be added after the hosted app passes the production smoke checks.
+**Live demo:** [caseflow-mi6l.onrender.com](https://caseflow-mi6l.onrender.com/). The public homepage is live on Render; the demo is available at [/demo](https://caseflow-mi6l.onrender.com/demo).
 
 ![CaseFlow read-only demo](docs/screenshots/caseflow-demo.png)
 
 ## Project status
 
-Milestones M0–M5 are implemented: application foundation, authentication, customer tickets, support workflow, read-only demo, and security/quality hardening. The Render/Neon deployment workflow is configured but gated; no production database, Render service, deployment URL, or cloud credentials are configured in this repository yet. See the [product and technical specification](docs/CASEFLOW_PRODUCT_TECHNICAL_SPEC.md), [deployment runbook](docs/CASEFLOW_DEPLOYMENT_RUNBOOK.md), and [implementation decisions](docs/ADR-001-implementation-clarifications.md).
+Milestones M0–M5 are implemented: application foundation, authentication, customer tickets, support workflow, read-only demo, and security/quality hardening. The app is deployed on Render at the live demo URL above. The GitHub Actions deployment workflow remains gated until its required secrets and service variable are configured. See the [product and technical specification](docs/CASEFLOW_PRODUCT_TECHNICAL_SPEC.md), [deployment runbook](docs/CASEFLOW_DEPLOYMENT_RUNBOOK.md), and [implementation decisions](docs/ADR-001-implementation-clarifications.md).
 
 ## Architecture
 
@@ -93,4 +93,4 @@ Backend integration tests use PostgreSQL. The Playwright journey provisions disp
 
 ## Deployment handoff
 
-The deployment workflow expects GitHub secret `PROD_DATABASE_URL_DIRECT`, secret `RENDER_DEPLOY_HOOK_URL`, secret `RENDER_API_KEY`, and repository variable `RENDER_SERVICE_ID`. Until these are configured for a real Neon database and Render service, deployment is skipped and the README intentionally has no live URL. Follow the [deployment runbook](docs/CASEFLOW_DEPLOYMENT_RUNBOOK.md); do not paste secret values into chat or Git.
+The live Render deployment is available at [caseflow-mi6l.onrender.com](https://caseflow-mi6l.onrender.com/). The GitHub Actions deployment workflow expects GitHub secret `PROD_DATABASE_URL_DIRECT`, secret `RENDER_DEPLOY_HOOK_URL`, secret `RENDER_API_KEY`, and repository variable `RENDER_SERVICE_ID`; automated workflow deployments remain skipped until those are configured for the production Neon database and Render service. Follow the [deployment runbook](docs/CASEFLOW_DEPLOYMENT_RUNBOOK.md); do not paste secret values into chat or Git.
